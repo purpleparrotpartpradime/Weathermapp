@@ -1,9 +1,10 @@
 from flask import Flask, jsonify, request
 import requests
+import os
 
 app = Flask(__name__)
 
-API_KEY = 'f00c38e0279b7bc85480c3fe775d518c'  # Replace with your OpenWeatherMap API key
+API_KEY = os.getenv('OPENWEATHER_API_KEY', '##redacted##')  # Fallback to provided key if env var not set
 
 @app.route('/weather', methods=['GET'])
 def get_weather():
