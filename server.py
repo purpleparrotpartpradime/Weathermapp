@@ -4,7 +4,7 @@ import os
 
 app = Flask(__name__)
 
-API_KEY = os.getenv('OPENWEATHER_API_KEY', '##redacted##')  # Fallback to provided key if env var not set
+API_KEY = os.getenv('OPENWEATHER_API_KEY', '7470b53506f3abb65fa29031a66c5806')  # Fallback to provided key if env var not set
 
 @app.route('/weather', methods=['GET'])
 def get_weather():
