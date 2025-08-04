@@ -1,0 +1,260 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Weather Tracker</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+        }
+
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+
+        #map-2d, #globe-3d {
+            flex: 2;
+            height: 100%;
+        }
+
+        #weather-info {
+            flex: 1;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            overflow-y: auto;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 10px;
+            background: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        #forecast {
+            margin-top: 20px;
+        }
+
+        .forecast-day {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+
+        #map-2d {
+            filter: grayscale(100%);
+        }
+
+        #globe-3d {
+            background: #000;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="map-2d"></div>
+        <div id="globe-3d" style="display: none;"></div>
+        <div id="weather-info">
+            <h1>Weather Tracker</h1>
+            <button id="locate-btn">Zoom to My Location</button>
+            <button id="toggle-map">Toggle 2D/3D Map</button>
+            <div id="current-weather">
+                <h2 id="city-name">Loading...</h2>
+                <p id="date"></p>
+                <p id="temperature"></p>
+                <p id="description"></p>
+                <p id="humidity"></p>
+                <p id="wind-speed"></p>
+            </div>
+            <div id="forecast"></div>
+        </div>
+    </div>
+    <script>
+        const apiKey = 'f00c38e0279b7bc85480c3fe775d518c'; // Replace with your OpenWeatherMap API key
+        let map, marker;
+        let is3D = false;
+        let scene, camera, renderer, globe;
+
+        $(document).ready(function () {
+            init2DMap();
+            getUserLocation();
+            $('#locate-btn').click(getUserLocation);
+            $('#toggle-map').click(toggleMap);
+        });
+
+        function init2DMap() {
+            map = L.map('map-2d').setView([0, 0], 2);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors',
+                maxZoom: 18,
+            }).addTo(map);
+            marker = L.marker([0, 0]).addTo(map);
+        }
+
+        function init3DGlobe(lat, lon) {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth * 0.66, window.innerHeight);
+            document.getElementById('globe-3d').appendChild(renderer.domElement);
+
+            const geometry = new THREE.SphereGeometry(5, 32, 32);
+            const texture = new THREE.TextureLoader().load('static/earth.jpg');
+            const material = new THREE.MeshBasicMaterial({ map: texture });
+            globe = new THREE.Mesh(geometry, material);
+            scene.add(globe);
+
+            camera.position.z = 10;
+
+            const animate = () => {
+                requestAnimationFrame(animate);
+                globe.rotation.y += 0.005;
+                renderer.render(scene, camera);
+            };
+            animate();
+
+            addWeatherOverlay(lat, lon);
+        }
+
+        function addWeatherOverlay(lat, lon) {
+            const cloudTexture = new THREE.TextureLoader().load('static/clouds.png');
+            const cloudMaterial = new THREE.MeshBasicMaterial({
+                map: cloudTexture,
+                transparent: true,
+                opacity: 0.5
+            });
+            const cloudGeometry = new THREE.SphereGeometry(5.1, 32, 32);
+            const clouds = new THREE.Mesh(cloudGeometry, cloudMaterial);
+            scene.add(clouds);
+        }
+
+        function toggleMap() {
+            is3D = !is3D;
+            if (is3D) {
+                $('#map-2d').hide();
+                $('#globe-3d').show();
+                init3DGlobe(map.getCenter().lat, map.getCenter().lng);
+            } else {
+                $('#globe-3d').hide();
+                $('#map-2d').show();
+                renderer.domElement.remove();
+            }
+        }
+
+        function getUserLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const { latitude, longitude } = position.coords;
+                        map.setView([latitude, longitude], 10);
+                        marker.setLatLng([latitude, longitude]);
+                        fetchWeatherData(latitude, longitude);
+                    },
+                    () => alert('Unable to retrieve location.')
+                );
+            } else {
+                alert('Geolocation is not supported by this browser.');
+            }
+        }
+
+        async function fetchWeatherData(lat, lon) {
+            try {
+                const response = await fetch(`http://localhost:5000/weather?lat=${lat}&lon=${lon}`);
+                const data = await response.json();
+                if (response.ok) {
+                    displayWeather(data.current);
+                    displayForecast(data.forecast);
+                } else {
+                    alert('Error fetching weather data.');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        function displayWeather(data) {
+            $('#city-name').text(data.name);
+            $('#date').text(moment().format('MMMM Do YYYY, h:mm:ss a'));
+            $('#temperature').html(`${data.main.temp}°C`);
+            $('#description').text(data.weather[0].description);
+            $('#humidity').text(`Humidity: ${data.main.humidity}%`);
+            $('#wind-speed').text(`Wind Speed: ${data.wind.speed} m/s`);
+        }
+
+        function displayForecast(forecast) {
+            $('#forecast').empty();
+            forecast.daily.forEach(day => {
+                const date = moment.unix(day.dt).format('MMM Do');
+                const temp = day.temp.day;
+                const desc = day.weather[0].description;
+                const icon = day.weather[0].icon;
+                $('#forecast').append(`
+                    <div class="forecast-day">
+                        <p>${date}</p>
+                        <img src="http://openweathermap.org/img/wn/${icon}.png" alt="${desc}">
+                        <p>${temp}°C</p>
+                        <p>${desc}</p>
+                    </div>
+                `);
+            });
+        }
+    </script>
+</body>
+</html>
