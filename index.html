@@ -66,6 +66,11 @@
         #globe-3d {
             background: #000;
         }
+
+        #error-message {
+            color: #ff4444;
+            margin: 10px;
+        }
     </style>
 </head>
 <body>
@@ -83,6 +88,7 @@
                 <p id="description"></p>
                 <p id="humidity"></p>
                 <p id="wind-speed"></p>
+                <p id="error-message"></p>
             </div>
             <div id="forecast"></div>
         </div>
@@ -91,11 +97,12 @@
         let map, marker;
         let is3D = false;
         let scene, camera, renderer, globe;
+        let watchId;
 
         $(document).ready(function () {
             init2DMap();
-            getUserLocation();
-            $('#locate-btn').click(getUserLocation);
+            startLocationTracking();
+            $('#locate-btn').click(zoomToCurrentLocation);
             $('#toggle-map').click(toggleMap);
         });
 
@@ -158,62 +165,91 @@
             }
         }
 
-        function getUserLocation() {
+        function startLocationTracking() {
             if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
+                watchId = navigator.geolocation.watchPosition(
                     (position) => {
                         const { latitude, longitude } = position.coords;
                         map.setView([latitude, longitude], 10);
                         marker.setLatLng([latitude, longitude]);
                         fetchWeatherData(latitude, longitude);
                     },
-                    () => alert('Unable to retrieve location.')
+                    (error) => {
+                        $('#error-message').text('Unable to retrieve location: ' + error.message);
+                    },
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
                 );
             } else {
-                alert('Geolocation is not supported by this browser.');
+                $('#error-message').text('Geolocation is not supported by this browser.');
             }
         }
 
-        async function fetchWeatherData(lat, lon) {
+        function zoomToCurrentLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const { latitude, longitude } = position.coords;
+                        map.setView([latitude, longitude], 12);
+                        marker.setLatLng([latitude, longitude]);
+                        if (is3D) {
+                            $('#globe-3d').hide();
+                            $('#map-2d').show();
+                            is3D = false;
+                            renderer.domElement.remove();
+                        }
+                    },
+                    () => $('#error-message').text('Unable to retrieve location.')
+                );
+            }
+        }
+
+        async function fetchWeatherData(lat, lon, retries = 3) {
             try {
                 const response = await fetch(`http://localhost:5000/weather?lat=${lat}&lon=${lon}`);
                 const data = await response.json();
                 if (response.ok) {
+                    $('#error-message').text('');
                     displayWeather(data.current);
                     displayForecast(data.forecast);
                 } else {
-                    alert('Error fetching weather data.');
+                    throw new Error(data.error || 'Error fetching weather data');
                 }
             } catch (error) {
-                console.error('Error:', error);
+                if (retries > 0) {
+                    setTimeout(() => fetchWeatherData(lat, lon, retries - 1), 2000);
+                } else {
+                    $('#error-message').text('Failed to fetch weather data: ' + error.message);
+                }
             }
         }
 
         function displayWeather(data) {
-            $('#city-name').text(data.name);
+            $('#city-name').text(data.name || 'Unknown Location');
             $('#date').text(moment().format('MMMM Do YYYY, h:mm:ss a'));
-            $('#temperature').html(`${data.main.temp}°C`);
-            $('#description').text(data.weather[0].description);
-            $('#humidity').text(`Humidity: ${data.main.humidity}%`);
-            $('#wind-speed').text(`Wind Speed: ${data.wind.speed} m/s`);
+            $('#temperature').html(data.main ? `${data.main.temp}°C` : 'N/A');
+            $('#description').text(data.weather && data.weather[0] ? data.weather[0].description : 'N/A');
+            $('#humidity').text(data.main ? `Humidity: ${data.main.humidity}%` : 'N/A');
+            $('#wind-speed').text(data.wind ? `Wind Speed: ${data.wind.speed} m/s` : 'N/A');
         }
 
         function displayForecast(forecast) {
             $('#forecast').empty();
-            forecast.daily.forEach(day => {
-                const date = moment.unix(day.dt).format('MMM Do');
-                const temp = day.temp.day;
-                const desc = day.weather[0].description;
-                const icon = day.weather[0].icon;
-                $('#forecast').append(`
-                    <div class="forecast-day">
-                        <p>${date}</p>
-                        <img src="http://openweathermap.org/img/wn/${icon}.png" alt="${desc}">
-                        <p>${temp}°C</p>
-                        <p>${desc}</p>
-                    </div>
-                `);
-            });
+            if (forecast && forecast.daily) {
+                forecast.daily.forEach(day => {
+                    const date = moment.unix(day.dt).format('MMM Do');
+                    const temp = day.temp ? day.temp.day : 'N/A';
+                    const desc = day.weather && day.weather[0] ? day.weather[0].description : 'N/A';
+                    const icon = day.weather && day.weather[0] ? day.weather[0].icon : '01d';
+                    $('#forecast').append(`
+                        <div class="forecast-day">
+                            <p>${date}</p>
+                            <img src="http://openweathermap.org/img/wn/${icon}.png" alt="${desc}">
+                            <p>${temp}°C</p>
+                            <p>${desc}</p>
+                        </div>
+                    `);
+                });
+            }
         }
     </script>
 </body>
